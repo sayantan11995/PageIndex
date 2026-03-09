@@ -53,7 +53,11 @@ def get_model_name(model):
 def count_tokens(text, model=None):
     if not text:
         return 0
-    enc = tiktoken.encoding_for_model(model)
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # Azure deployment names are not recognized by tiktoken; fall back to cl100k_base
+        enc = tiktoken.get_encoding("cl100k_base")
     tokens = enc.encode(text)
     return len(tokens)
 
@@ -381,6 +385,75 @@ class JsonLogger:
 
 
 
+def validate_and_repair_hierarchy(data):
+    """
+    Check if structure codes are all flat (single-level) and attempt to infer
+    hierarchy from title numbering patterns (e.g., "1.1 Measuring blood pressure").
+    """
+    if not data:
+        return data
+
+    # Check if all structure codes are single-level (no dots)
+    has_hierarchy = False
+    for item in data:
+        s = str(item.get('structure', ''))
+        if '.' in s:
+            has_hierarchy = True
+            break
+
+    if has_hierarchy:
+        return data
+
+    # All structure codes are flat. Try to infer hierarchy from title numbering.
+    import re
+    numbering_pattern = re.compile(r'^(\d+(?:\.\d+)+)\s')
+
+    # Build a mapping: detect titles like "1.1 Topic", "1.2 Topic"
+    inferred = []
+    for item in data:
+        title = item.get('title', '')
+        match = numbering_pattern.match(title)
+        if match:
+            inferred.append(match.group(1))
+        else:
+            inferred.append(None)
+
+    # Count how many titles have numbering patterns
+    numbered_count = sum(1 for x in inferred if x is not None)
+
+    if numbered_count < 2:
+        # Not enough evidence to infer hierarchy from titles
+        print('Warning: All structure codes are flat (single-level). No title numbering detected for hierarchy inference.')
+        return data
+
+    # Infer hierarchy: assign structure codes based on title numbering
+    print(f'Repairing flat hierarchy: detected {numbered_count} numbered titles')
+
+    # Group consecutive numbered items under their nearest preceding non-numbered parent
+    child_counter = {}  # parent_structure -> next child number
+
+    for i, item in enumerate(data):
+        if inferred[i] is not None:
+            # Find the parent: look backwards for a non-numbered item
+            parent_structure = None
+            for j in range(i - 1, -1, -1):
+                if inferred[j] is None:
+                    parent_structure = str(data[j].get('structure', ''))
+                    break
+
+            if parent_structure:
+                # Track child count per parent
+                if parent_structure not in child_counter:
+                    child_counter[parent_structure] = 1
+                else:
+                    child_counter[parent_structure] += 1
+                child_num = child_counter[parent_structure]
+                item['structure'] = f"{parent_structure}.{child_num}"
+            # else: no parent found, keep flat structure code as-is
+
+    return data
+
+
 def list_to_tree(data):
     def get_parent_structure(structure):
         """Helper function to get the parent structure code"""
@@ -388,11 +461,11 @@ def list_to_tree(data):
             return None
         parts = str(structure).split('.')
         return '.'.join(parts[:-1]) if len(parts) > 1 else None
-    
+
     # First pass: Create nodes and track parent-child relationships
     nodes = {}
     root_nodes = []
-    
+
     for item in data:
         structure = item.get('structure')
         node = {
@@ -401,12 +474,12 @@ def list_to_tree(data):
             'end_index': item.get('end_index'),
             'nodes': []
         }
-        
+
         nodes[structure] = node
-        
+
         # Find parent
         parent_structure = get_parent_structure(structure)
-        
+
         if parent_structure:
             # Add as child to parent if parent exists
             if parent_structure in nodes:
@@ -416,7 +489,7 @@ def list_to_tree(data):
         else:
             # No parent, this is a root node
             root_nodes.append(node)
-    
+
     # Helper function to clean empty children arrays
     def clean_node(node):
         if not node['nodes']:
@@ -425,7 +498,7 @@ def list_to_tree(data):
             for child in node['nodes']:
                 clean_node(child)
         return node
-    
+
     # Clean and return the tree
     return [clean_node(node) for node in root_nodes]
 
@@ -502,11 +575,13 @@ def post_processing(structure, end_physical_index):
                 item['end_index'] = structure[i + 1]['physical_index']
         else:
             item['end_index'] = end_physical_index
+    # Validate and repair flat hierarchy before building the tree
+    structure = validate_and_repair_hierarchy(structure)
     tree = list_to_tree(structure)
     if len(tree)!=0:
         return tree
     else:
-        ### remove appear_start 
+        ### remove appear_start
         for node in structure:
             node.pop('appear_start', None)
             node.pop('physical_index', None)
@@ -651,10 +726,27 @@ async def generate_summaries_for_structure(structure, model=None):
     nodes = structure_to_list(structure)
     tasks = [generate_node_summary(node, model=model) for node in nodes]
     summaries = await asyncio.gather(*tasks)
-    
+
     for node, summary in zip(nodes, summaries):
         node['summary'] = summary
+
+    # Differentiate parent vs leaf summaries: parent nodes get prefix_summary
+    _assign_prefix_summaries(structure)
     return structure
+
+
+def _assign_prefix_summaries(structure):
+    """Rename 'summary' to 'prefix_summary' for parent nodes (nodes with children)."""
+    if isinstance(structure, dict):
+        if 'nodes' in structure and structure['nodes']:
+            # This is a parent node - use prefix_summary
+            if 'summary' in structure:
+                structure['prefix_summary'] = structure.pop('summary')
+            _assign_prefix_summaries(structure['nodes'])
+        # Leaf nodes keep 'summary' as-is
+    elif isinstance(structure, list):
+        for item in structure:
+            _assign_prefix_summaries(item)
 
 
 def create_clean_structure_for_description(structure):
