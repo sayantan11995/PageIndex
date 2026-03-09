@@ -19,6 +19,37 @@ from types import SimpleNamespace as config
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
+
+def get_openai_client(api_key=None):
+    """Return OpenAI or AzureOpenAI client based on env vars."""
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    if azure_endpoint:
+        return openai.AzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+        )
+    return openai.OpenAI(api_key=api_key or CHATGPT_API_KEY)
+
+
+def get_async_openai_client(api_key=None):
+    """Return AsyncOpenAI or AsyncAzureOpenAI client based on env vars."""
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    if azure_endpoint:
+        return openai.AsyncAzureOpenAI(
+            azure_endpoint=azure_endpoint,
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+        )
+    return openai.AsyncOpenAI(api_key=api_key or CHATGPT_API_KEY)
+
+
+def get_model_name(model):
+    """Return Azure deployment name if configured, otherwise the model name."""
+    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    return azure_deployment if azure_deployment else model
+
+
 def count_tokens(text, model=None):
     if not text:
         return 0
@@ -28,7 +59,8 @@ def count_tokens(text, model=None):
 
 def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
-    client = openai.OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
+    resolved_model = get_model_name(model)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -36,9 +68,9 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_
                 messages.append({"role": "user", "content": prompt})
             else:
                 messages = [{"role": "user", "content": prompt}]
-            
+
             response = client.chat.completions.create(
-                model=model,
+                model=resolved_model,
                 messages=messages,
                 temperature=0,
             )
@@ -60,7 +92,8 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_
 
 def ChatGPT_API(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
-    client = openai.OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
+    resolved_model = get_model_name(model)
     for i in range(max_retries):
         try:
             if chat_history:
@@ -68,9 +101,9 @@ def ChatGPT_API(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
                 messages.append({"role": "user", "content": prompt})
             else:
                 messages = [{"role": "user", "content": prompt}]
-            
+
             response = client.chat.completions.create(
-                model=model,
+                model=resolved_model,
                 messages=messages,
                 temperature=0,
             )
@@ -88,12 +121,13 @@ def ChatGPT_API(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
 
 async def ChatGPT_API_async(model, prompt, api_key=CHATGPT_API_KEY):
     max_retries = 10
+    resolved_model = get_model_name(model)
     messages = [{"role": "user", "content": prompt}]
     for i in range(max_retries):
         try:
-            async with openai.AsyncOpenAI(api_key=api_key) as client:
+            async with get_async_openai_client(api_key) as client:
                 response = await client.chat.completions.create(
-                    model=model,
+                    model=resolved_model,
                     messages=messages,
                     temperature=0,
                 )
