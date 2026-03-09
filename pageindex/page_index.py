@@ -244,9 +244,9 @@ def toc_index_extractor(toc, content, model=None):
 
     The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
 
-    The structure variable is a HIERARCHICAL numeric system using dot-notation to represent nesting depth (e.g., "1" for top-level, "1.1" for subsection, "1.1.1" for sub-subsection). Preserve the hierarchy from the input table of contents.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
-    The response should be in the following JSON format:
+    The response should be in the following JSON format: 
     [
         {
             "structure": <structure index, "x.x.x" or None> (string),
@@ -272,15 +272,9 @@ def toc_transformer(toc_content, model=None):
     init_prompt = """
     You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
 
-    The structure variable is a HIERARCHICAL numeric system using dot-notation to represent nesting depth.
-    You MUST use hierarchical numbering to reflect the document's section/subsection relationships:
-    - Top-level sections: "1", "2", "3"
-    - Subsections under section 1: "1.1", "1.2", "1.3"
-    - Sub-subsections: "1.1.1", "1.1.2"
+    structure is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
-    IMPORTANT: Preserve the hierarchy from the original table of contents. If a section is indented or numbered as a sub-section (e.g., "1.1", "a)", "i)"), assign it a sub-level structure code, NOT a new top-level code.
-
-    The response should be in the following JSON format:
+    The response should be in the following JSON format: 
     {
     table_of_contents: [
         {
@@ -509,26 +503,15 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     You are given a tree structure of the previous part and the text of the current part.
     Your task is to continue the tree structure from the previous part to include the current part.
 
-    The structure variable is a HIERARCHICAL numeric system using dot-notation to represent nesting depth.
-    You MUST use hierarchical numbering to reflect the document's section/subsection relationships:
-    - Top-level sections: "1", "2", "3"
-    - Subsections under section 1: "1.1", "1.2", "1.3"
-    - Sub-subsections: "1.1.1", "1.1.2"
-
-    Example: If "Recommendations" is section 3, and it contains sub-sections like "Measuring blood pressure" and "Diagnosing hypertension", then:
-    - {"structure": "3", "title": "Recommendations", ...}
-    - {"structure": "3.1", "title": "Measuring blood pressure", ...}
-    - {"structure": "3.2", "title": "Diagnosing hypertension", ...}
-
-    IMPORTANT: If a section title contains numbering (e.g., "1.1 Topic") or is clearly a sub-topic of a preceding section, it MUST be assigned a sub-level structure code (e.g., "3.1"), NOT a new top-level code. Analyze the logical nesting of the document carefully.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     For the title, you need to extract the original title from the text, only fix the space inconsistency.
 
     The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X. \
-
+    
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
 
-    The response should be in the following format.
+    The response should be in the following format. 
         [
             {
                 "structure": <structure index, "x.x.x"> (string),
@@ -536,7 +519,7 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
                 "physical_index": "<physical_index_X> (keep the format)"
             },
             ...
-        ]
+        ]    
 
     Directly return the additional part of the final JSON structure. Do not output anything else."""
 
@@ -553,33 +536,22 @@ def generate_toc_init(part, model=None):
     prompt = """
     You are an expert in extracting hierarchical tree structure, your task is to generate the tree structure of the document.
 
-    The structure variable is a HIERARCHICAL numeric system using dot-notation to represent nesting depth.
-    You MUST use hierarchical numbering to reflect the document's section/subsection relationships:
-    - Top-level sections: "1", "2", "3"
-    - Subsections under section 1: "1.1", "1.2", "1.3"
-    - Sub-subsections: "1.1.1", "1.1.2"
-
-    Example: If "Introduction" is section 1 and "Background" and "Objectives" are sub-sections under it:
-    - {{"structure": "1", "title": "Introduction"}}
-    - {{"structure": "1.1", "title": "Background"}}
-    - {{"structure": "1.2", "title": "Objectives"}}
-
-    IMPORTANT: If a section title contains numbering (e.g., "1.1 Topic") or is clearly a sub-topic of a preceding section, it MUST be assigned a sub-level structure code (e.g., "1.1"), NOT a new top-level code. Analyze the logical nesting of the document carefully.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     For the title, you need to extract the original title from the text, only fix the space inconsistency.
 
-    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X.
+    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X. 
 
     For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
 
-    The response should be in the following format.
+    The response should be in the following format. 
         [
             {{
                 "structure": <structure index, "x.x.x"> (string),
                 "title": <title of the section, keep the original title>,
                 "physical_index": "<physical_index_X> (keep the format)"
             }},
-
+            
         ],
 
 
@@ -1079,10 +1051,7 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
         for node in toc_tree
     ]
     await asyncio.gather(*tasks)
-
-    # Fix parent page ranges after large node splitting (bottom-up)
-    fix_parent_page_ranges(toc_tree)
-
+    
     return toc_tree
 
 
