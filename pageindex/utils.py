@@ -502,6 +502,23 @@ def list_to_tree(data):
     # Clean and return the tree
     return [clean_node(node) for node in root_nodes]
 
+
+def fix_parent_page_ranges(tree):
+    """Update parent nodes' end_index to encompass all children (bottom-up)."""
+    if isinstance(tree, list):
+        for node in tree:
+            fix_parent_page_ranges(node)
+    elif isinstance(tree, dict):
+        if 'nodes' in tree and tree['nodes']:
+            # First fix children recursively (bottom-up)
+            for child in tree['nodes']:
+                fix_parent_page_ranges(child)
+            # Then update this parent's end_index to max of children
+            max_end = max(child.get('end_index', 0) for child in tree['nodes'])
+            if max_end > tree.get('end_index', 0):
+                tree['end_index'] = max_end
+
+
 def add_preface_if_needed(data):
     if not isinstance(data, list) or not data:
         return data
@@ -579,6 +596,7 @@ def post_processing(structure, end_physical_index):
     structure = validate_and_repair_hierarchy(structure)
     tree = list_to_tree(structure)
     if len(tree)!=0:
+        fix_parent_page_ranges(tree)
         return tree
     else:
         ### remove appear_start

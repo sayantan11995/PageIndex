@@ -1079,7 +1079,10 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
         for node in toc_tree
     ]
     await asyncio.gather(*tasks)
-    
+
+    # Fix parent page ranges after large node splitting (bottom-up)
+    fix_parent_page_ranges(toc_tree)
+
     return toc_tree
 
 

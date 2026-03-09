@@ -46,7 +46,7 @@ def main():
                         help='Whether to add summary to the node')
     parser.add_argument('--if-add-doc-description', type=str, default='no',
                         help='Whether to add doc description to the doc')
-    parser.add_argument('--if-add-node-text', type=str, default='no',
+    parser.add_argument('--if-add-node-text', type=str, default='yes',
                         help='Whether to add text to the node')
 
     args = parser.parse_args()
