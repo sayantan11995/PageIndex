@@ -262,9 +262,108 @@ def toc_index_extractor(toc, content, model=None):
 
     prompt = toc_extractor_prompt + '\nTable of contents:\n' + str(toc) + '\nDocument pages:\n' + content
     response = ChatGPT_API(model=model, prompt=prompt)
-    json_content = extract_json(response)    
+    json_content = extract_json(response)
     return json_content
 
+
+
+def parse_toc_hierarchy(toc_content, model=None):
+    """
+    Parse raw TOC text using Python indentation analysis to extract hierarchy.
+    Falls back to toc_transformer() if indentation analysis cannot determine hierarchy.
+
+    Returns: list of {"structure": "x.x", "title": "...", "page": int|None}
+    """
+    print('start parse_toc_hierarchy')
+
+    # Header lines to skip
+    skip_headers = {'contents', 'table of contents', 'toc'}
+
+    lines = toc_content.split('\n')
+    parsed_items = []
+
+    for line in lines:
+        # Measure leading whitespace
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        indent = len(line) - len(stripped)
+        stripped = stripped.strip()
+        if not stripped:
+            continue
+
+        # Skip header lines like "Contents"
+        if stripped.lower() in skip_headers:
+            continue
+
+        # Split on ":" (dots were already converted to ":" by toc_extractor)
+        # to separate title from page number
+        title = stripped
+        page = None
+        if ':' in stripped:
+            parts = stripped.rsplit(':', 1)
+            candidate_title = parts[0].strip()
+            candidate_page = parts[1].strip()
+            if candidate_page and candidate_page.isdigit():
+                title = candidate_title
+                page = int(candidate_page)
+            elif not candidate_page:
+                title = candidate_title
+
+        if not title:
+            continue
+
+        parsed_items.append({
+            'indent': indent,
+            'title': title,
+            'page': page,
+        })
+
+    if not parsed_items:
+        print('parse_toc_hierarchy: no items parsed, falling back to toc_transformer')
+        return toc_transformer(toc_content, model)
+
+    # Map unique indentation levels to depth
+    unique_indents = sorted(set(item['indent'] for item in parsed_items))
+
+    if len(unique_indents) <= 1:
+        # All lines have same indentation — cannot determine hierarchy from indentation
+        print('parse_toc_hierarchy: single indent level detected, falling back to toc_transformer')
+        return toc_transformer(toc_content, model)
+
+    indent_to_depth = {indent: depth for depth, indent in enumerate(unique_indents)}
+
+    # Generate hierarchical structure codes
+    max_depth = len(unique_indents)
+    counters = [0] * max_depth
+    result = []
+
+    for item in parsed_items:
+        depth = indent_to_depth[item['indent']]
+
+        # Increment counter at this depth
+        counters[depth] += 1
+        # Reset all deeper counters
+        for d in range(depth + 1, max_depth):
+            counters[d] = 0
+
+        # Build structure code: "1", "1.1", "1.1.2", etc.
+        structure = '.'.join(str(counters[d]) for d in range(depth + 1))
+
+        result.append({
+            'structure': structure,
+            'title': item['title'],
+            'page': item['page'],
+        })
+
+    # Validate: check that we have at least 2 distinct depth levels in output
+    depths_used = set(indent_to_depth[item['indent']] for item in parsed_items)
+    if len(depths_used) < 2:
+        print('parse_toc_hierarchy: only one depth level in output, falling back to toc_transformer')
+        return toc_transformer(toc_content, model)
+
+    print(f'parse_toc_hierarchy: parsed {len(result)} items with {len(unique_indents)} hierarchy levels')
+    return result
 
 
 def toc_transformer(toc_content, model=None):
@@ -274,7 +373,12 @@ def toc_transformer(toc_content, model=None):
 
     structure is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
-    The response should be in the following JSON format: 
+    CRITICAL: Sub-sections MUST have structure codes that extend their parent's code.
+    If "Recommendations" is structure "2", then sections under it like "Measuring blood pressure" must be "2.1", "2.2", etc. — NOT "3", "4".
+    A flat list of "1", "2", "3", "4"... is WRONG unless the document truly has no nesting.
+    Analyze indentation and context to determine parent-child relationships.
+
+    The response should be in the following JSON format:
     {
     table_of_contents: [
         {
@@ -589,8 +693,8 @@ def process_no_toc(page_list, start_index=1, model=None, logger=None):
 def process_toc_no_page_numbers(toc_content, toc_page_list, page_list,  start_index=1, model=None, logger=None):
     page_contents=[]
     token_lengths=[]
-    toc_content = toc_transformer(toc_content, model)
-    logger.info(f'toc_transformer: {toc_content}')
+    toc_content = parse_toc_hierarchy(toc_content, model)
+    logger.info(f'parse_toc_hierarchy: {toc_content}')
     for page_index in range(start_index, start_index+len(page_list)):
         page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
         page_contents.append(page_text)
@@ -612,7 +716,7 @@ def process_toc_no_page_numbers(toc_content, toc_page_list, page_list,  start_in
 
 
 def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_check_page_num=None, model=None, logger=None):
-    toc_with_page_number = toc_transformer(toc_content, model)
+    toc_with_page_number = parse_toc_hierarchy(toc_content, model)
     logger.info(f'toc_with_page_number: {toc_with_page_number}')
 
     toc_no_page_number = remove_page_number(copy.deepcopy(toc_with_page_number))
@@ -1024,18 +1128,27 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
 
     if check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip() and check_toc_result["page_index_given_in_toc"] == "yes":
         toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_toc_with_page_numbers', 
-            start_index=1, 
-            toc_content=check_toc_result['toc_content'], 
-            toc_page_list=check_toc_result['toc_page_list'], 
+            page_list,
+            mode='process_toc_with_page_numbers',
+            start_index=1,
+            toc_content=check_toc_result['toc_content'],
+            toc_page_list=check_toc_result['toc_page_list'],
+            opt=opt,
+            logger=logger)
+    elif check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip():
+        toc_with_page_number = await meta_processor(
+            page_list,
+            mode='process_toc_no_page_numbers',
+            start_index=1,
+            toc_content=check_toc_result['toc_content'],
+            toc_page_list=check_toc_result['toc_page_list'],
             opt=opt,
             logger=logger)
     else:
         toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_no_toc', 
-            start_index=1, 
+            page_list,
+            mode='process_no_toc',
+            start_index=1,
             opt=opt,
             logger=logger)
 
